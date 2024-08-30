@@ -6,15 +6,14 @@ import torch.optim as optim
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 from util.tools import extract_and_round_data
-from util.tools import combine_tensors_random1_lidar2
 
 
 class PhysicsInformedNN(nn.Module):
     def __init__(self, x, y, z, t, u, v, w, phi, theda, layers, device):
         super(PhysicsInformedNN, self).__init__()
 
-        self.phi = torch.tensor(phi, dtype=torch.float32).to(device)
-        self.theda = torch.tensor(theda, dtype=torch.float32).to(device)
+        self.phi = phi
+        self.theda = theda
 
         X = np.concatenate([x, y, z, t], axis=1)  # N x 4
         self.lb = torch.tensor(X.min(0), dtype=torch.float32).to(device)
@@ -71,26 +70,10 @@ class PhysicsInformedNN(nn.Module):
     def neural_net(self, X, weights, biases):
         num_layers = len(weights) + 1
 
-        # H = X
-        # minus_range = self.ub - self.lb
-        H = 2.0 * (X - self.lb) / (self.ub - self.lb + 0.0001) - 1.0
-        # 由于平面扫描，z是定值，所以归一化时会出现分母为零，这里需要处理一下，统一为0
-        # [注意以下代码有问题，因为输入的计算图是打开的，如此操作会破坏计算图，没法算梯度]
-        # zero_index = (minus_range == 0).nonzero()
-        # if zero_index.numel() > 0:
-        #     # minus_range[zero_index[0].item()] =  1
-        #     H[:, zero_index[0].item()] = 0
-
+        H = 2.0 * (X - self.lb) / (self.ub - self.lb) - 1.0
         for l in range(0, num_layers - 2):
             W = weights[l]
             b = biases[l]
-            # print(torch.isnan(W).any())
-            # print(torch.isnan(H).any())
-            # print(torch.isnan(X).any())
-            # print(torch.isnan(b).any())
-            # cc = self.ub - self.lb
-            # aa = torch.matmul(H, W)
-            # bb = torch.add(aa, b)
             H = torch.tanh(torch.add(torch.matmul(H, W), b))
         W = weights[-1]
         b = biases[-1]
@@ -151,13 +134,13 @@ class PhysicsInformedNN(nn.Module):
     def calc_v_magnitude(self, u, v, w):
         return torch.sqrt(u ** 2 + v ** 2 + w ** 2) / 8
 
-    def forward(self, x, y, z, t, u, v, w, phi, theda, data_type):
+    def forward(self, x, y, z, t, data_type):
         self.Reciprocal_Re.data.clamp_(min=1e-8)
         u_pred, v_pred, w_pred, p_pred, f_u_pred, f_v_pred, f_w_pred, f_e_pred = self.net_NS(x, y, z, t)
 
-        if data_type == 'LiDAR':  # LiDAR measured speed (line of sight)
-            speed_pred = self.calc_v(u_pred, v_pred, w_pred, phi, theda)
-            speed = self.calc_v(u, v, w, phi, theda)
+        if data_type != 'LiDAR':  # LiDAR measured speed (line of sight)
+            speed_pred = self.calc_v(u_pred, v_pred, w_pred, self.phi, self.theda)
+            speed = self.calc_v(self.u, self.v, self.w, self.phi, self.theda)
             data_loss = torch.mean((speed - speed_pred) ** 2)
             equation_loss = torch.mean(f_u_pred ** 2) + torch.mean(f_v_pred ** 2) + torch.mean(f_w_pred ** 2) + torch.mean(f_e_pred ** 2)
             loss = (data_loss + equation_loss) / 2
@@ -167,59 +150,54 @@ class PhysicsInformedNN(nn.Module):
         return loss
 
     def train(self, nIter, save_path):
+        def closure(x, y, z, t, data_type):
+            self.optimizer.zero_grad()
+            loss = self.forward(x, y, z, t, data_type)
+            loss.backward()
+            # print(f"Re: {self.Re.item()}, Re grad: {self.Re.grad}")
+            # print(f"Re requires grad: {self.Re.requires_grad}")
+            return loss
+
         writer = SummaryWriter(log_dir=os.path.join(save_path, 'tensorboard_logs'))
         global_step = 0
         start_time = time.time()
         total_loss = 0
 
         x_random_points, y_random_points, z_random_points, t_random_points, u_random_points, v_random_points, w_random_points, phi_random_points, theda_random_points = extract_and_round_data(
-            self.x, self.y, self.z, self.t, self.u, self.v, self.w, self.phi, self.theda, 'RandomPoints')
+            self.x, self.y, self.z, self.u,
+            self.v, self.w, self.phi, self.theda, 'random_points')
         x_lidar, y_lidar, z_lidar, t_lidar, u_lidar, v_lidar, w_lidar, phi_lidar, theda_lidar = extract_and_round_data(
-            self.x, self.y, self.z, self.t, self.u, self.v, self.w, self.phi, self.theda, 'LiDar')
-        x_combine = combine_tensors_random1_lidar2(x_random_points, x_lidar)
-        y_combine = combine_tensors_random1_lidar2(y_random_points, y_lidar)
-        z_combine = combine_tensors_random1_lidar2(z_random_points, z_lidar)
-        t_combine = combine_tensors_random1_lidar2(t_random_points, t_lidar)
-        u_combine = combine_tensors_random1_lidar2(u_random_points, u_lidar)
-        v_combine = combine_tensors_random1_lidar2(v_random_points, v_lidar)
-        w_combine = combine_tensors_random1_lidar2(w_random_points, w_lidar)
-        phi_combine = combine_tensors_random1_lidar2(phi_random_points, phi_lidar)
-        theda_combine = combine_tensors_random1_lidar2(theda_random_points, theda_lidar)
+            self.x, self.y, self.z, self.u, self.v, self.w, self.phi, self.theda, 'lidar')
 
         for it in range(nIter):
-            loss_value = 0
-            for j in range(x_combine.size(1)):
-                # self.optimizer.zero_grad()
-                if j != (x_combine.size(1)-1):
-                    loss = self.forward(x_combine[:, j].unsqueeze(1), y_combine[:, j].unsqueeze(1), z_combine[:, j].unsqueeze(1), t_combine[:, j].unsqueeze(1), u_combine[:, j].unsqueeze(1), v_combine[:, j].unsqueeze(1), w_combine[:, j].unsqueeze(1), phi_combine[:, j].unsqueeze(1), theda_combine[:, j].unsqueeze(1), 'RandomPoints')
-                else:
-                    loss = self.forward(x_combine[:, j].unsqueeze(1), y_combine[:, j].unsqueeze(1), z_combine[:, j].unsqueeze(1), t_combine[:, j].unsqueeze(1), u_combine[:, j].unsqueeze(1), v_combine[:, j].unsqueeze(1), w_combine[:, j].unsqueeze(1), phi_combine[:, j].unsqueeze(1), theda_combine[:, j].unsqueeze(1), 'LiDAR')
-                loss.backward(retain_graph=True)
-                # loss.backward()
-                self.optimizer.step()
-                self.optimizer.zero_grad()
-                loss_value += loss.item()
-
-            elapsed = time.time() - start_time
-            Re_value = self.Reciprocal_Re.item()
-            total_loss = np.mean(loss_value)
-            print(f'epoch-%d--------------------------------------------', it)
-            print('It: %d, Loss: %.3f, Re: %.5f, Time: %.2f' %
-                  (it + 1, total_loss, Re_value, elapsed))
-            if (it + 1) % 10 == 0:
-                print('It: %d, Loss: %.3f, Re: %.5f, Time: %.2f' %
-                      (it + 1, total_loss, Re_value, elapsed))
-                writer.add_scalar('Loss/iter', total_loss, global_step)
-                writer.add_scalar('Params/Re', Re_value, global_step)
-                global_step += 10
-                start_time = time.time()
+            self.optimizer.step(closure(x, y, z, t, data_type))
 
             if (it + 1) % 100 == 0:
-                avg_loss = total_loss
-                writer.add_scalar('Loss/epoch', avg_loss, global_step)
+                elapsed = time.time() - start_time
+                loss_value = self.forward().item()
+                Re_value = self.Reciprocal_Re.item()
+                total_loss += loss_value
+                print('It: %d, Loss: %.3f, Re: %.5f, Time: %.2f' %
+                      (it + 1, loss_value, Re_value, elapsed))
+                writer.add_scalar('Loss/iter', loss_value, global_step)
+                writer.add_scalar('Params/Re', Re_value, global_step)
+                global_step += 100
+                start_time = time.time()
+
+            if (it + 1) % 10000 == 0:
+                avg_loss = total_loss / 100
+                writer.add_scalar('Loss/epoch', avg_loss, global_step / 10000)
                 torch.save(self.state_dict(), os.path.join(save_path, f'PINN_{it + 1}.pth'))
                 print("Model weights saved at iteration: ", it + 1)
-                # total_loss = 0
+                total_loss = 0
+
+                # torch.save({
+                #     'epoch': it+1,
+                #     'model_state_dict': self.state_dict(),
+                #     'optimizer_state_dict': self.optimizer_lbfgs.state_dict(),
+                #     'loss': self.forward().item(),
+                #     'learning_rate': self.optimizer_lbfgs.param_groups[0]['lr'],
+                # }, os.path.join(save_path, f'PINN_{it + 1}.pth'))
 
         print("Training is Finish!!!")
         writer.close()
