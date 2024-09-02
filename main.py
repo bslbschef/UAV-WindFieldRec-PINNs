@@ -7,12 +7,8 @@ from util.tools import *
 
 if __name__ == "__main__":
     N_train = 97000  # sparsity: 0.14%
-<<<<<<< HEAD
     # layers = [4, 100, 100, 100, 100, 4]
     layers = [4, 50, 50, 50, 50, 4]
-=======
-    layers = [4, 100, 100, 100, 100, 4]
->>>>>>> 1241c209b565d286a1e27a579c0e7826eddee6ef
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     df = pd.read_csv('./data/LiDAR_data_xyztuvwphitheta_horizontal_add_random_points.csv')
