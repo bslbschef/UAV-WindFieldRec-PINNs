@@ -1,10 +1,12 @@
 import numpy as np
+import torch
+import os
 from scipy.interpolate import griddata
 import matplotlib.pyplot as plt
 
 
 def calc_v_magnitude(u, v, w):
-    return np.sqrt( u**2 + v** 2 + w ** 2)
+    return np.sqrt(u ** 2 + v ** 2 + w ** 2)
 
 
 def plot_solution_XY_Single(X_star, u_star, index):
@@ -382,3 +384,52 @@ def predict_filed_XY(data, model, rand_t, rand_z):
     plt.show()
 
     plot_solution_XY_Single(xy_location, np.abs(speed_star - speed_pred), 3)
+
+
+def extract_and_round_data_all(df):
+    x = df.iloc[:, 0].values.reshape(-1, 1).round(1)
+    y = df.iloc[:, 1].values.reshape(-1, 1).round(1)
+    z = df.iloc[:, 2].values.reshape(-1, 1).round(1)
+    t = df.iloc[:, 3].values.reshape(-1, 1)
+    u = df.iloc[:, 4].values.reshape(-1, 1)
+    v = df.iloc[:, 5].values.reshape(-1, 1)
+    w = df.iloc[:, 6].values.reshape(-1, 1)
+    phi = df.iloc[:, 7].values.reshape(-1, 1)
+    theda = df.iloc[:, 8].values.reshape(-1, 1)
+    return x, y, z, t, u, v, w, phi, theda
+
+
+def extract_and_round_data(x_input, y_input, z_input, t_input, u_input, v_input, w_input, phi_input, theda_input, data_type):
+    if data_type == 'LiDar':
+        index = phi_input != -888
+    elif data_type == 'RandomPoints':
+        index = phi_input == -888
+    x = x_input[index]
+    y = y_input[index]
+    z = z_input[index]
+    t = t_input[index]
+    u = u_input[index]
+    v = v_input[index]
+    w = w_input[index]
+    phi = phi_input[index]
+    theda = theda_input[index]
+    return x, y, z, t, u, v, w, phi, theda
+
+
+def findLastPth(path):
+    try:
+        pth_files = [os.path.join(path, f) for f in os.listdir(path) if f.endswith('.pth')]
+        lastPth = max(pth_files, key=os.path.getctime)
+    except ValueError:
+        lastPth = None
+    return lastPth
+
+
+def combine_tensors_random1_lidar2(tensor_random, tensor_lidar):
+    reshaped_tensor_lidar = tensor_random.unsqueeze(1).view(20000, -1)
+    return torch.cat((reshaped_tensor_lidar, tensor_lidar.unsqueeze(1)), dim=1)
+    # return torch.cat((tensor_lidar.unsqueeze(1), reshaped_tensor_lidar), dim=1)
+
+# def combine_tensors_random1_lidar2(arr_random, arr_lidar):
+#     reshaped_arr_lidar = np.expand_dims(arr_random, axis=1).reshape(20000, -1)
+#     return np.concatenate((reshaped_arr_lidar, np.expand_dims(arr_lidar, axis=1)), axis=1)
